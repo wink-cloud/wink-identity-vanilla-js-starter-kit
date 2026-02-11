@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wink Identity - Vanilla JS Starter Kit</title>
+
+  <!-- Wink Identity Web SDK -->
+  <script src="https://unpkg.com/wink-identity-sdk@0.1.3/dist/wink-id.umd.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f5f7fb;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+    }
+
+    .container {
+      background: #fff;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      text-align: center;
+      width: 400px;
+    }
+
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+
+    button:hover {
+      background: #1e40af;
+    }
+
+    #sdk-container {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>Wink Identity Verification</h2>
+    <p>Click below to start identity verification</p>
+
+    <button id="loginBtn">Login</button>
+    <button id="logoutBtn" hidden>Logout</button>
+  </div>
+
+  <script>
+    const config = {
+        clientId: "__client_id__",
+        realm: "__realm__",
+        secret: "__secret__",
+        loggingEnabled: true,
+        cancelUrl: "http://localhost:3000/callback", // Path of callback URL
+        onAuthErrorFailure: (error) => console.error(error),
+    };
+
+    const winkLoginClient = getWinkLoginClient(config);
+    const loginBtn = document.getElementById("loginBtn");
+    const logoutBtn = document.getElementById("logoutBtn");
+
+    winkLoginClient.winkInit({
+        silentCheckSsoRedirectUri:
+            "http://localhost:3000/silent-check-sso.html", // silent login check html
+
+        onFailure(error) {
+            console.error(error);
+        },
+        async onSuccess() {
+            logoutBtn.removeAttribute("hidden");
+            loginBtn.setAttribute("hidden", true);
+            const user = await winkLoginClient.getUser();
+            console.log("user", user);
+        },
+    });
+
+    loginBtn.addEventListener("click", () => {
+        winkLoginClient.winkLogin({
+            onFailure(error) {
+                console.error(error);
+            },
+        });
+    });
+
+    logoutBtn.addEventListener("click", () => {
+        loginBtn.removeAttribute("hidden");
+        logoutBtn.setAttribute("hidden", true);
+        winkLoginClient.winkLogout({
+            onFailure(error) {
+                console.error(error);
+            },
+        });
+    });
+  </script>
+</body>
+</html>
