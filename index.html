@@ -5,103 +5,493 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Wink Identity - Vanilla JS Starter Kit</title>
 
+  <!-- Official Wink button styles (https://github.com/wink-cloud/wink-integration) -->
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/gh/wink-cloud/wink-integration@main/button.css"
+  />
+
+  <!-- Load config before SDK (copy config.example.js to config.js) -->
+  <script src="config.js"></script>
+
   <!-- Wink Identity Web SDK -->
-  <script src="https://unpkg.com/wink-identity-sdk@0.1.3/dist/wink-id.umd.js"></script>
+  <script src="https://unpkg.com/wink-identity-sdk@0.2.5/dist/wink-id.umd.js"></script>
 
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
       margin: 0;
-      font-family: Arial, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       background: #f5f7fb;
+      min-height: 100vh;
       display: flex;
       justify-content: center;
       align-items: center;
-      height: 100vh;
+      padding: 20px;
     }
 
     .container {
       background: #fff;
-      padding: 30px;
+      padding: 32px;
       border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+      max-width: 420px;
+      width: 100%;
       text-align: center;
-      width: 400px;
     }
 
-    button {
+    h2 {
+      margin: 0 0 8px;
+      font-size: 1.5rem;
+      color: #1e293b;
+    }
+
+    .subtitle {
+      margin: 0 0 24px;
+      color: #64748b;
+      font-size: 0.95rem;
+    }
+
+    .status {
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 0.875rem;
+      margin-bottom: 20px;
+      background: #f1f5f9;
+      color: #475569;
+    }
+
+    .status.error {
+      background: #fef2f2;
+      color: #b91c1c;
+    }
+
+    .btn {
       background: #2563eb;
       color: white;
       border: none;
-      padding: 12px 20px;
+      padding: 12px 24px;
       border-radius: 8px;
       cursor: pointer;
       font-size: 16px;
+      font-weight: 500;
+      transition: background 0.2s;
     }
 
-    button:hover {
-      background: #1e40af;
+    .btn:hover:not(:disabled) {
+      background: #1d4ed8;
     }
 
-    #sdk-container {
-      margin-top: 20px;
+    .btn:disabled,
+    .wink-oauth-button-light:disabled,
+    .wink-oauth-button-dark:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background: #64748b;
+      margin-left: 8px;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: #475569;
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .profile-panel {
+      margin-top: 24px;
+      padding: 20px;
+      background: #f8fafc;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+      text-align: left;
+    }
+
+    .profile-panel h3 {
+      margin: 0 0 16px;
+      font-size: 1rem;
+      color: #334155;
+    }
+
+    .profile-row {
+      display: flex;
+      padding: 8px 0;
+      font-size: 0.9rem;
+    }
+
+    .profile-label {
+      min-width: 100px;
+      color: #64748b;
+      font-weight: 500;
+    }
+
+    .profile-value {
+      color: #1e293b;
+    }
+
+    .hidden {
+      display: none;
     }
   </style>
 </head>
 <body>
   <div class="container">
     <h2>Wink Identity Verification</h2>
-    <p>Click below to start identity verification</p>
+    <p class="subtitle">Authenticate with Wink Identity biometric flow</p>
 
-    <button id="loginBtn">Login</button>
-    <button id="logoutBtn" hidden>Logout</button>
+    <div id="statusEl" class="status" role="status" aria-live="polite">unauthenticated</div>
+
+    <div id="authRow" class="btn-row">
+      <button
+        id="loginBtn"
+        class="wink-oauth-button-light"
+        type="button"
+        aria-label="Login with Wink"
+      >
+        <img
+          src="https://cdn.jsdelivr.net/gh/wink-cloud/wink-integration@main/semicolon-red.svg"
+          alt="Wink"
+          width="28"
+          height="28"
+        />
+        Login with Wink
+      </button>
+    </div>
+
+    <div id="authenticatedRow" class="btn-row hidden">
+      <button id="refreshBtn" class="btn btn-secondary" type="button" aria-label="Refresh profile">
+        Refresh Profile
+      </button>
+      <button id="logoutBtn" class="btn" type="button" aria-label="Logout">
+        Logout
+      </button>
+    </div>
+
+    <div id="profilePanel" class="profile-panel hidden" aria-labelledby="profileTitle">
+      <h3 id="profileTitle">Authenticated User Profile</h3>
+      <div id="profileContent"></div>
+    </div>
   </div>
 
   <script>
-    const config = {
-        clientId: "__client_id__",
-        realm: "__realm__",
-        secret: "__secret__",
-        loggingEnabled: true,
-        cancelUrl: "http://localhost:3000/callback", // Path of callback URL
-        onAuthErrorFailure: (error) => console.error(error),
-    };
+    (function () {
+      "use strict";
 
-    const winkLoginClient = getWinkLoginClient(config);
-    const loginBtn = document.getElementById("loginBtn");
-    const logoutBtn = document.getElementById("logoutBtn");
+      const MANUAL_LOGOUT_KEY = "wink_manual_logout";
 
-    winkLoginClient.winkInit({
-        silentCheckSsoRedirectUri:
-            "http://localhost:3000/silent-check-sso.html", // silent login check html
+      function getConfig() {
+        if (typeof window.WINK_CONFIG !== "object" || !window.WINK_CONFIG) {
+          throw new Error("WINK_CONFIG not loaded. Copy config.example.js to config.js and configure.");
+        }
+        return window.WINK_CONFIG;
+      }
 
-        onFailure(error) {
+      function updateStatus(text, isError) {
+        const el = document.getElementById("statusEl");
+        el.textContent = text;
+        el.classList.toggle("error", !!isError);
+      }
+
+      function setAuthState(state) {
+        updateStatus(state, state === "error");
+      }
+
+      function clearBrowserSessionArtifacts() {
+        document.cookie.split(";").forEach(function (cookie) {
+          const separatorIndex = cookie.indexOf("=");
+          const name = separatorIndex > -1 ? cookie.substring(0, separatorIndex).trim() : cookie.trim();
+          document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
+        });
+        Object.keys(window.localStorage).filter(function (key) {
+          return (
+            key.includes("kc-callback") ||
+            key.includes("wink") ||
+            key.includes("token") ||
+            key.includes("session")
+          );
+        }).forEach(function (key) {
+          window.localStorage.removeItem(key);
+        });
+        window.sessionStorage.removeItem("wink_post_auth_next");
+      }
+
+      function markManualLogout() {
+        window.sessionStorage.setItem(MANUAL_LOGOUT_KEY, "1");
+      }
+
+      function clearManualLogout() {
+        window.sessionStorage.removeItem(MANUAL_LOGOUT_KEY);
+      }
+
+      function hasManualLogoutMarker() {
+        return window.sessionStorage.getItem(MANUAL_LOGOUT_KEY) === "1";
+      }
+
+      function fetchSessionFromBackend(backendUrl, returnUrl, cancelUrl) {
+        const base = backendUrl.replace(/\/$/, "");
+        const params = new URLSearchParams({ returnUrl: returnUrl, cancelUrl: cancelUrl });
+        return fetch(base + "/session?" + params.toString()).then(function (res) {
+          if (!res.ok) {
+            return res.json().catch(function () {
+              return {};
+            }).then(function (err) {
+              throw new Error(err.error || "Backend session request failed: " + res.status);
+            });
+          }
+          return res.json();
+        });
+      }
+
+      function fetchUserFromBackend(backendUrl, clientId, token) {
+        const base = backendUrl.replace(/\/$/, "");
+        const params = new URLSearchParams({ clientId: clientId, token: token });
+        return fetch(base + "/user?" + params.toString()).then(function (res) {
+          if (!res.ok) {
+            return res.json().catch(function () {
+              return {};
+            }).then(function (err) {
+              throw new Error(err.error || "Backend user request failed: " + res.status);
+            });
+          }
+          return res.json();
+        });
+      }
+
+      function buildOidcLogoutUrl(params) {
+        const authUrl = params.authUrl;
+        const realm = params.realm;
+        const clientId = params.clientId;
+        const idToken = params.idToken;
+        const redirectUri = params.redirectUri;
+        if (!authUrl || !realm || !clientId || !redirectUri) return null;
+        const normalizedAuthUrl = authUrl.endsWith("/") ? authUrl.slice(0, -1) : authUrl;
+        const base = normalizedAuthUrl + "/realms/" + encodeURIComponent(realm) + "/protocol/openid-connect/logout";
+        const searchParams = new URLSearchParams({
+          post_logout_redirect_uri: redirectUri,
+          client_id: clientId,
+        });
+        if (idToken) searchParams.set("id_token_hint", idToken);
+        return base + "?" + searchParams.toString();
+      }
+
+      function buildWinkConfig(sessionId) {
+        const cfg = getConfig();
+        const origin = window.location.origin;
+        const config = {
+          clientId: cfg.clientId,
+          realm: cfg.realm,
+          loggingEnabled: true,
+          cancelUrl: origin + "/callback.html",
+          onAuthErrorFailure: function (error) {
+            console.error("Wink auth error:", error);
+          },
+          override: true,
+          overrideValues: {
+            BASE_URL: cfg.baseUrl,
+            AUTH_URL: cfg.authUrl,
+          },
+        };
+        if (sessionId) config.sessionId = sessionId;
+        return config;
+      }
+
+      function renderProfile(user) {
+        const fields = [
+          { key: "firstName", label: "First name" },
+          { key: "lastName", label: "Last name" },
+          { key: "email", label: "Email" },
+          { key: "contactNo", label: "Contact" },
+          { key: "winkTag", label: "Wink tag" },
+          { key: "winkToken", label: "Wink token" },
+          { key: "expiryTime", label: "Expiry" },
+        ];
+        const html = fields
+          .map(function (f) {
+            const val = user[f.key];
+            if (val == null || val === "") return "";
+            return (
+              '<div class="profile-row">' +
+              '<span class="profile-label">' + f.label + ":</span>" +
+              '<span class="profile-value">' + String(val).replace(/</g, "&lt;") + "</span>" +
+              "</div>"
+            );
+          })
+          .filter(Boolean)
+          .join("");
+        document.getElementById("profileContent").innerHTML = html || "<p>No profile fields available.</p>";
+      }
+
+      function showAuthenticated(show) {
+        document.getElementById("authRow").classList.toggle("hidden", show);
+        document.getElementById("authenticatedRow").classList.toggle("hidden", !show);
+        document.getElementById("profilePanel").classList.toggle("hidden", !show);
+      }
+
+      function setButtonLoading(loading) {
+        document.getElementById("loginBtn").disabled = loading;
+        document.getElementById("refreshBtn").disabled = loading;
+      }
+
+      let winkClient = null;
+      let userProfile = null;
+
+      function loadUserProfile(client, callback) {
+        const cfg = getConfig();
+        if (!cfg.backendUrl) {
+          setAuthState("error");
+          updateStatus("Backend URL not configured. Set backendUrl in config.js.", true);
+          if (callback) callback(new Error("Backend URL not configured."));
+          return;
+        }
+        const token = (client && (client.token || client.idToken)) || "";
+        if (!token) {
+          setAuthState("error");
+          updateStatus("No token available for user request.", true);
+          if (callback) callback(new Error("No token available."));
+          return;
+        }
+        setAuthState("loading_profile");
+        setButtonLoading(true);
+        fetchUserFromBackend(cfg.backendUrl, cfg.clientId, token)
+          .then(function (user) {
+            userProfile = user;
+            renderProfile(user);
+            setAuthState("authenticated");
+            showAuthenticated(true);
+            if (callback) callback(null);
+          })
+          .catch(function (err) {
+            console.error("Unable to load Wink user profile:", err);
+            setAuthState("error");
+            updateStatus("Profile fetch failed: " + (err && err.message ? err.message : "Unknown error"), true);
+            if (callback) callback(err);
+          })
+          .finally(function () {
+            setButtonLoading(false);
+          });
+      }
+
+      function handleLoginClick() {
+        const cfg = getConfig();
+        if (!cfg.backendUrl) {
+          setAuthState("error");
+          updateStatus("Backend URL not configured. Set backendUrl in config.js.", true);
+          return;
+        }
+        clearManualLogout();
+        setAuthState("logging_in");
+        setButtonLoading(true);
+        const origin = window.location.origin + window.location.pathname;
+        const cancelUrl = window.location.origin + "/callback.html";
+        fetchSessionFromBackend(cfg.backendUrl, origin, cancelUrl)
+          .then(function (session) {
+            const sessionId =
+              session.sessionId || session.SessionId || session.id || session.session_id;
+            if (!sessionId) {
+              throw new Error("Backend session response has no sessionId.");
+            }
+            const clientWithSession = getWinkLoginClient(buildWinkConfig(sessionId));
+            clientWithSession.winkInit({
+              onLoad: "login-required",
+              checkLoginIframe: false,
+              onFailure: function (error) {
+                console.error(error);
+                setAuthState("unauthenticated");
+                setButtonLoading(false);
+                updateStatus("Login failed: " + (error && error.message ? error.message : "Unknown"), true);
+              },
+            });
+            setButtonLoading(false);
+          })
+          .catch(function (err) {
+            console.error("Session fetch failed:", err);
+            setAuthState("error");
+            setButtonLoading(false);
+            updateStatus("Session failed: " + (err && err.message ? err.message : "Unknown"), true);
+          });
+      }
+
+      function handleRefreshClick() {
+        if (winkClient) {
+          loadUserProfile(winkClient);
+        }
+      }
+
+      function handleLogoutClick() {
+        markManualLogout();
+        setAuthState("logging_out");
+        userProfile = null;
+        showAuthenticated(false);
+        clearBrowserSessionArtifacts();
+
+        const cfg = getConfig();
+        const idToken = winkClient && winkClient.idToken;
+        const logoutUrl = buildOidcLogoutUrl({
+          authUrl: cfg.authUrl,
+          realm: cfg.realm,
+          clientId: cfg.clientId,
+          idToken: idToken,
+          redirectUri: window.location.origin,
+        });
+
+        if (logoutUrl) {
+          window.location.assign(logoutUrl);
+          return;
+        }
+
+        setAuthState("error");
+        updateStatus("Unable to build OIDC logout URL. Check config (authUrl, realm, clientId).", true);
+      }
+
+      function init() {
+        try {
+          getConfig();
+        } catch (e) {
+          updateStatus(e.message || "Config not loaded", true);
+          return;
+        }
+
+        const cfg = getConfig();
+        winkClient = getWinkLoginClient(buildWinkConfig());
+        const loginBtn = document.getElementById("loginBtn");
+        const logoutBtn = document.getElementById("logoutBtn");
+        const refreshBtn = document.getElementById("refreshBtn");
+
+        loginBtn.addEventListener("click", handleLoginClick);
+        logoutBtn.addEventListener("click", handleLogoutClick);
+        refreshBtn.addEventListener("click", handleRefreshClick);
+
+        winkClient.winkInit({
+          silentCheckSsoRedirectUri: window.location.origin + "/silent-check-sso.html",
+          onFailure: function (error) {
             console.error(error);
-        },
-        async onSuccess() {
-            logoutBtn.removeAttribute("hidden");
-            loginBtn.setAttribute("hidden", true);
-            const user = await winkLoginClient.getUser();
-            console.log("user", user);
-        },
-    });
-
-    loginBtn.addEventListener("click", () => {
-        winkLoginClient.winkLogin({
-            onFailure(error) {
-                console.error(error);
-            },
+            setAuthState("unauthenticated");
+          },
+          onSuccess: function () {
+            if (hasManualLogoutMarker()) {
+              setAuthState("unauthenticated");
+              return;
+            }
+            loadUserProfile(winkClient, function () {});
+          },
         });
-    });
 
-    logoutBtn.addEventListener("click", () => {
-        loginBtn.removeAttribute("hidden");
-        logoutBtn.setAttribute("hidden", true);
-        winkLoginClient.winkLogout({
-            onFailure(error) {
-                console.error(error);
-            },
-        });
-    });
+        setAuthState("unauthenticated");
+      }
+
+      init();
+    })();
   </script>
 </body>
 </html>
