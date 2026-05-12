@@ -15,7 +15,7 @@
   <script src="config.js"></script>
 
   <!-- Wink Identity Web SDK -->
-  <script src="https://unpkg.com/wink-identity-sdk@0.2.5/dist/wink-id.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/wink-identity-sdk@0.3.0/dist/wink-id.umd.min.js"></script>
 
   <style>
     * {
@@ -188,8 +188,6 @@
     (function () {
       "use strict";
 
-      const MANUAL_LOGOUT_KEY = "wink_manual_logout";
-
       function getConfig() {
         if (typeof window.WINK_CONFIG !== "object" || !window.WINK_CONFIG) {
           throw new Error("WINK_CONFIG not loaded. Copy config.example.js to config.js and configure.");
@@ -205,37 +203,6 @@
 
       function setAuthState(state) {
         updateStatus(state, state === "error");
-      }
-
-      function clearBrowserSessionArtifacts() {
-        document.cookie.split(";").forEach(function (cookie) {
-          const separatorIndex = cookie.indexOf("=");
-          const name = separatorIndex > -1 ? cookie.substring(0, separatorIndex).trim() : cookie.trim();
-          document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
-        });
-        Object.keys(window.localStorage).filter(function (key) {
-          return (
-            key.includes("kc-callback") ||
-            key.includes("wink") ||
-            key.includes("token") ||
-            key.includes("session")
-          );
-        }).forEach(function (key) {
-          window.localStorage.removeItem(key);
-        });
-        window.sessionStorage.removeItem("wink_post_auth_next");
-      }
-
-      function markManualLogout() {
-        window.sessionStorage.setItem(MANUAL_LOGOUT_KEY, "1");
-      }
-
-      function clearManualLogout() {
-        window.sessionStorage.removeItem(MANUAL_LOGOUT_KEY);
-      }
-
-      function hasManualLogoutMarker() {
-        return window.sessionStorage.getItem(MANUAL_LOGOUT_KEY) === "1";
       }
 
       function fetchSessionFromBackend(backendUrl, returnUrl, cancelUrl) {
@@ -268,31 +235,13 @@
         });
       }
 
-      function buildOidcLogoutUrl(params) {
-        const authUrl = params.authUrl;
-        const realm = params.realm;
-        const clientId = params.clientId;
-        const idToken = params.idToken;
-        const redirectUri = params.redirectUri;
-        if (!authUrl || !realm || !clientId || !redirectUri) return null;
-        const normalizedAuthUrl = authUrl.endsWith("/") ? authUrl.slice(0, -1) : authUrl;
-        const base = normalizedAuthUrl + "/realms/" + encodeURIComponent(realm) + "/protocol/openid-connect/logout";
-        const searchParams = new URLSearchParams({
-          post_logout_redirect_uri: redirectUri,
-          client_id: clientId,
-        });
-        if (idToken) searchParams.set("id_token_hint", idToken);
-        return base + "?" + searchParams.toString();
-      }
-
-      function buildWinkConfig(sessionId) {
+      function buildWinkConfig() {
         const cfg = getConfig();
-        const origin = window.location.origin;
-        const config = {
+        return {
           clientId: cfg.clientId,
           realm: cfg.realm,
           loggingEnabled: true,
-          cancelUrl: origin + "/callback.html",
+          cancelUrl: window.location.origin + "/callback.html",
           onAuthErrorFailure: function (error) {
             console.error("Wink auth error:", error);
           },
@@ -302,8 +251,6 @@
             AUTH_URL: cfg.authUrl,
           },
         };
-        if (sessionId) config.sessionId = sessionId;
-        return config;
       }
 
       function renderProfile(user) {
@@ -389,22 +336,20 @@
           updateStatus("Backend URL not configured. Set backendUrl in config.js.", true);
           return;
         }
-        clearManualLogout();
         setAuthState("logging_in");
         setButtonLoading(true);
-        const origin = window.location.origin + window.location.pathname;
+        const returnUrl = window.location.origin + window.location.pathname;
         const cancelUrl = window.location.origin + "/callback.html";
-        fetchSessionFromBackend(cfg.backendUrl, origin, cancelUrl)
+        fetchSessionFromBackend(cfg.backendUrl, returnUrl, cancelUrl)
           .then(function (session) {
             const sessionId =
               session.sessionId || session.SessionId || session.id || session.session_id;
             if (!sessionId) {
               throw new Error("Backend session response has no sessionId.");
             }
-            const clientWithSession = getWinkLoginClient(buildWinkConfig(sessionId));
-            clientWithSession.winkInit({
-              onLoad: "login-required",
-              checkLoginIframe: false,
+            return winkClient.winkLogin({
+              sessionId: sessionId,
+              redirectUri: returnUrl,
               onFailure: function (error) {
                 console.error(error);
                 setAuthState("unauthenticated");
@@ -412,13 +357,12 @@
                 updateStatus("Login failed: " + (error && error.message ? error.message : "Unknown"), true);
               },
             });
-            setButtonLoading(false);
           })
           .catch(function (err) {
-            console.error("Session fetch failed:", err);
+            console.error("Login failed:", err);
             setAuthState("error");
             setButtonLoading(false);
-            updateStatus("Session failed: " + (err && err.message ? err.message : "Unknown"), true);
+            updateStatus("Login failed: " + (err && err.message ? err.message : "Unknown"), true);
           });
       }
 
@@ -429,29 +373,18 @@
       }
 
       function handleLogoutClick() {
-        markManualLogout();
         setAuthState("logging_out");
         userProfile = null;
         showAuthenticated(false);
-        clearBrowserSessionArtifacts();
 
-        const cfg = getConfig();
-        const idToken = winkClient && winkClient.idToken;
-        const logoutUrl = buildOidcLogoutUrl({
-          authUrl: cfg.authUrl,
-          realm: cfg.realm,
-          clientId: cfg.clientId,
-          idToken: idToken,
+        winkClient.winkLogout({
           redirectUri: window.location.origin,
+          onFailure: function (error) {
+            console.error("Wink logout failed:", error);
+            setAuthState("error");
+            updateStatus("Logout failed: " + (error && error.message ? error.message : "Unknown"), true);
+          },
         });
-
-        if (logoutUrl) {
-          window.location.assign(logoutUrl);
-          return;
-        }
-
-        setAuthState("error");
-        updateStatus("Unable to build OIDC logout URL. Check config (authUrl, realm, clientId).", true);
       }
 
       function init() {
@@ -479,10 +412,6 @@
             setAuthState("unauthenticated");
           },
           onSuccess: function () {
-            if (hasManualLogoutMarker()) {
-              setAuthState("unauthenticated");
-              return;
-            }
             loadUserProfile(winkClient, function () {});
           },
         });
